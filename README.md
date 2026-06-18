@@ -4,12 +4,21 @@ Query local CSV, Parquet, and JSON files from any AI coding tool (RooCode, Curso
 
 ## Install
 
-**Option A — cargo install (requires Rust):**
+### Option A — cargo install
+
+If you have Rust installed, this is the simplest way on any platform:
+
 ```bash
 cargo install --git https://github.com/melihbirim/pipetable-mcp
 ```
 
-**Option B — download binary** from [Releases](https://github.com/melihbirim/pipetable-mcp/releases/latest):
+The binary is placed in `~/.cargo/bin/` which is on your PATH after a standard Rust install. No further steps needed.
+
+Don't have Rust? Install it from [rustup.rs](https://rustup.rs) — takes about a minute.
+
+### Option B — download binary
+
+Download the pre-built binary for your platform from [Releases](https://github.com/melihbirim/pipetable-mcp/releases/latest):
 
 | Platform | File |
 |---|---|
