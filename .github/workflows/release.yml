@@ -24,6 +24,12 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: pipetable-mcp-windows-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: pipetable-mcp-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: pipetable-mcp-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +48,10 @@ jobs:
             target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y cmake g++
 
       - name: Build (Unix)
         if: runner.os != 'Windows'
