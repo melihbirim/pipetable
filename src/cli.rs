@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 use rustyline::{DefaultEditor, error::ReadlineError};
 
 use crate::engine::State;
@@ -25,8 +26,12 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
     // Check Ollama availability once at startup
     let ollama_ok = ollama::is_available().await;
 
-    eprintln!("Pipetable  https://pipetable.com");
-    eprintln!("DuckDB query engine · local files only");
+    eprintln!(
+        "{}  {}",
+        "Pipetable".bright_yellow().bold(),
+        "https://pipetable.com".dimmed()
+    );
+    eprintln!("{}", "DuckDB query engine · local files only".dimmed());
     eprintln!();
 
     // Auto-scan if path given
@@ -36,19 +41,20 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
     }
 
     if ollama_ok {
-        eprintln!("Model: {current_model} (Ollama)");
+        eprintln!("{} {}", "Model:".dimmed(), current_model.dimmed());
     } else {
-        eprintln!("Ollama not found at localhost:11434 — natural language disabled.");
-        eprintln!("  Install: https://ollama.com  then: ollama pull {}", ollama::DEFAULT_MODEL);
-        eprintln!("  SQL queries still work.");
+        eprintln!("{}", "Ollama not found — natural language disabled.".yellow());
+        eprintln!("  {}", format!("Install: https://ollama.com  then: ollama pull {}", ollama::DEFAULT_MODEL).dimmed());
+        eprintln!("  {}", "SQL queries still work.".dimmed());
     }
-    eprintln!("Type .help for commands. Ctrl+D to exit.");
+    eprintln!("{}", "Type .help for commands. Ctrl+D to exit.".dimmed());
     eprintln!();
 
     let mut rl = DefaultEditor::new()?;
+    let prompt = format!("{} ", ">".bright_yellow().bold());
 
     loop {
-        let readline = rl.readline("> ");
+        let readline = rl.readline(&prompt);
         match readline {
             Ok(line) => {
                 let line = line.trim().to_string();
@@ -108,13 +114,13 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
         println!("{}", state.schema(rest.trim()));
     } else if line == ".models" {
         match ollama::list_models().await {
-            Ok(m) if m.is_empty() => println!("No models found. Try: ollama pull {}", ollama::DEFAULT_MODEL),
-            Ok(m) => { for name in m { println!("  {name}"); } }
-            Err(e) => println!("Error: {e}"),
+            Ok(m) if m.is_empty() => println!("{}", format!("No models. Try: ollama pull {}", ollama::DEFAULT_MODEL).yellow()),
+            Ok(m) => { for name in m { println!("  {}", name.bright_white()); } }
+            Err(e) => println!("{} {e}", "Error:".red().bold()),
         }
     } else if let Some(rest) = line.strip_prefix(".model ") {
         *model = rest.trim().to_string();
-        println!("Model set to: {model}");
+        println!("{} {}", "Model:".dimmed(), model.bright_white());
     } else if line == ".help" {
         println!("{HELP}");
     } else if line == ".quit" || line == ".exit" {
@@ -123,12 +129,12 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
         println!("{}", state.query(line));
     } else {
         if !ollama_ok {
-            println!("Ollama is not running. SQL only mode. Type .help for commands.");
+            println!("{}", "Ollama is not running — SQL only mode. Type .help for commands.".yellow());
             return;
         }
         let schema = state.schema_prompt();
         if schema.is_empty() {
-            println!("No datasets loaded. Use .scan <path> first.");
+            println!("{}", "No datasets loaded. Use .scan <path> first.".yellow());
             return;
         }
         match ollama::nl_to_sql(line, &schema, model).await {
@@ -136,8 +142,8 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
                 println!();
                 println!("{}", state.query(&sql));
             }
-            Ok(_) => println!("(no SQL generated)"),
-            Err(e) => println!("Ollama error: {e}"),
+            Ok(_) => println!("{}", "(no SQL generated)".dimmed()),
+            Err(e) => println!("{} {e}", "Ollama error:".red().bold()),
         }
     }
 }

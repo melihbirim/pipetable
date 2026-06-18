@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
+use colored::Colorize;
 use duckdb::{Connection, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -95,8 +96,11 @@ impl State {
         }
         let sql = ensure_limit(sql, 500);
         match run_query(&self.conn, &sql) {
-            Ok((cols, rows)) => format!("{} row(s)\n\n{}", rows.len(), fmt_table(&cols, &rows)),
-            Err(e) => format!("SQL error: {e}"),
+            Ok((cols, rows)) => {
+                let count = format!("{} row(s)", rows.len()).dimmed().to_string();
+                format!("{count}\n\n{}", fmt_table(&cols, &rows))
+            }
+            Err(e) => format!("{} {e}", "SQL error:".red().bold()),
         }
     }
 
@@ -179,14 +183,23 @@ pub fn do_scan(s: &mut State, folder: &str) -> String {
         ok += 1;
     }
 
-    let mut out = format!("Scanned: {folder}\nRegistered {ok} dataset(s).\n\n");
+    let header = format!("Scanned: {}\nRegistered {} dataset(s).\n", folder, ok)
+        .dimmed()
+        .to_string();
+    let mut out = format!("{header}\n");
     for ds in s.datasets.values() {
         let rows = if ds.row_count >= 0 { ds.row_count.to_string() } else { "?".into() };
-        out.push_str(&format!("  [ok] {} - {} rows, {}\n", ds.name, rows, fmt_bytes(ds.size_bytes)));
+        out.push_str(&format!(
+            "  {} {}  {} rows  {}\n",
+            "✓".green(),
+            ds.name.bold(),
+            rows.dimmed(),
+            fmt_bytes(ds.size_bytes).dimmed()
+        ));
     }
     if !skipped.is_empty() {
-        out.push_str(&format!("\nSkipped {} file(s):\n", skipped.len()));
-        for s in &skipped { out.push_str(&format!("{s}\n")); }
+        out.push_str(&format!("\n{}\n", format!("Skipped {} file(s):", skipped.len()).yellow()));
+        for s in &skipped { out.push_str(&format!("  {}\n", s.dimmed())); }
     }
     out
 }
@@ -298,18 +311,33 @@ pub fn fmt_table(cols: &[String], rows: &[Vec<serde_json::Value>]) -> String {
         }
     }
     let mut out = String::new();
+
+    // Header — plain padded first, then dim the whole line
+    let mut hdr = String::new();
     for (i, col) in cols.iter().enumerate() {
-        out.push_str(&format!("{:width$}  ", col, width = widths[i].min(40)));
+        hdr.push_str(&format!("{:width$}  ", col, width = widths[i].min(40)));
     }
-    out.push('\n');
-    for &w in &widths { out.push_str(&"-".repeat(w.min(40) + 2)); }
-    out.push('\n');
+    out.push_str(&format!("{}\n", hdr.bold().dimmed()));
+
+    // Separator
+    let mut sep = String::new();
+    for &w in &widths { sep.push_str(&"─".repeat(w.min(40) + 2)); }
+    out.push_str(&format!("{}\n", sep.dimmed()));
+
+    // Data rows
     for row in rows {
         for (i, val) in row.iter().enumerate() {
             let w = if i < widths.len() { widths[i].min(40) } else { 10 };
             let s = json_str(val);
             let cell = if s.len() > w { format!("{}~", &s[..w.saturating_sub(1)]) } else { s };
-            out.push_str(&format!("{:width$}  ", cell, width = w));
+            let padded = format!("{:width$}  ", cell, width = w);
+            let colored = match val {
+                serde_json::Value::Number(_) => padded.bright_cyan().to_string(),
+                serde_json::Value::Null => padded.dimmed().to_string(),
+                serde_json::Value::Bool(_) => padded.bright_yellow().to_string(),
+                _ => padded,
+            };
+            out.push_str(&colored);
         }
         out.push('\n');
     }
