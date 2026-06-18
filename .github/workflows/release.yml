@@ -16,16 +16,16 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact: pipetable-mcp-macos-universal
+            artifact: pipetable-macos-universal
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: pipetable-mcp-windows-x86_64
+            artifact: pipetable-windows-x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: pipetable-mcp-linux-x86_64
+            artifact: pipetable-linux-x86_64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact: pipetable-mcp-linux-arm64
+            artifact: pipetable-linux-arm64
 
     steps:
       - uses: actions/checkout@v5
@@ -55,10 +55,10 @@ jobs:
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
           lipo -create \
-            target/aarch64-apple-darwin/release/pipetable-mcp \
-            target/x86_64-apple-darwin/release/pipetable-mcp \
-            -output pipetable-mcp-universal
-          tar czf ${{ matrix.artifact }}.tar.gz pipetable-mcp-universal
+            target/aarch64-apple-darwin/release/pipetable \
+            target/x86_64-apple-darwin/release/pipetable \
+            -output pipetable-universal
+          tar czf ${{ matrix.artifact }}.tar.gz pipetable-universal
 
       - name: Build Linux
         if: runner.os == 'Linux'
@@ -71,13 +71,13 @@ jobs:
       - name: Package Linux
         if: runner.os == 'Linux'
         run: |
-          cp target/${{ matrix.target }}/release/pipetable-mcp ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/pipetable ${{ matrix.artifact }}
           tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
       - name: Package Windows
         if: runner.os == 'Windows'
         run: |
-          copy target\${{ matrix.target }}\release\pipetable-mcp.exe ${{ matrix.artifact }}.exe
+          copy target\${{ matrix.target }}\release\pipetable.exe ${{ matrix.artifact }}.exe
           Compress-Archive -Path ${{ matrix.artifact }}.exe -DestinationPath ${{ matrix.artifact }}.zip
 
       - name: Upload artifact (Unix)

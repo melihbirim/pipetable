@@ -10,7 +10,7 @@ keywords = ["mcp", "duckdb", "data", "csv", "parquet"]
 categories = ["command-line-utilities", "database"]
 
 [[bin]]
-name = "pipetable-mcp"
+name = "pipetable"
 path = "src/main.rs"
 
 [dependencies]
@@ -22,3 +22,7 @@ duckdb = { version = "1.10502.0", features = ["bundled"] }
 walkdir = "2"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+rustyline = "14"
