@@ -14,7 +14,7 @@ use crate::ollama;
 
 const HELP: &str = r#"
 Commands:
-  .scan <path>     Load a folder or file
+  .scan <path>     Load a folder or file (Tab to complete path)
   .datasets        List loaded datasets
   .schema <name>   Show schema for a dataset
   .models          List available Ollama models
@@ -22,8 +22,15 @@ Commands:
   .help            Show this help
   .quit / Ctrl+D   Exit
 
-Anything else is treated as a natural language question (requires Ollama)
-or a SQL query (starts with SELECT, WITH, etc.)
+Querying:
+  SELECT region, SUM(revenue) FROM sales GROUP BY 1
+  show me top 5 customers by revenue        ← natural language (requires Ollama)
+  who had the highest sales last month?     ← Ollama generates the SQL for you
+
+Tips:
+  · SQL is detected automatically — no prefix needed
+  · Natural language requires Ollama: https://ollama.com
+  · Use Tab to complete .scan paths
 "#;
 
 // ─── Tab completion + readline helper ────────────────────────────────────────
@@ -103,12 +110,22 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
 
     if ollama_ok {
         eprintln!("{} {}", "Model:".dimmed(), current_model.dimmed());
+        eprintln!();
+        eprintln!("{}", "Ask anything:".dimmed());
+        eprintln!("  {}", "show me total revenue by region".bright_white());
+        eprintln!("  {}", "SELECT * FROM sales LIMIT 10".bright_white());
+        eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
     } else {
-        eprintln!("{}", "Ollama not found — natural language disabled.".yellow());
-        eprintln!("  {}", format!("Install: https://ollama.com  then: ollama pull {}", ollama::DEFAULT_MODEL).dimmed());
-        eprintln!("  {}", "SQL queries still work.".dimmed());
+        eprintln!("{}", "⚠  Ollama not running — natural language queries disabled.".yellow().bold());
+        eprintln!("   {}", "Start it:  ollama serve".dimmed());
+        eprintln!("   {}", format!("Then pull: ollama pull {}", ollama::DEFAULT_MODEL).dimmed());
+        eprintln!("   {}", "Not installed? https://ollama.com".dimmed());
+        eprintln!();
+        eprintln!("{}", "SQL still works:".dimmed());
+        eprintln!("  {}", "SELECT * FROM sales LIMIT 10".bright_white());
+        eprintln!("  {}", "SELECT region, COUNT(*) FROM orders GROUP BY 1".bright_white());
+        eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
     }
-    eprintln!("{}", "Type .help for commands. Ctrl+D to exit.".dimmed());
     eprintln!();
 
     let mut rl = Editor::<CliHelper, DefaultHistory>::new()?;
@@ -151,9 +168,11 @@ pub async fn ask(question: &str, path: Option<&str>, model: Option<&str>) -> Res
     }
 
     if !ollama::is_available().await {
-        eprintln!("Ollama not found at localhost:11434.");
-        eprintln!("  Install: https://ollama.com  then: ollama pull {model}");
-        eprintln!("  Or use SQL directly: pipetable ask \"SELECT ...\" ~/data/");
+        eprintln!("{}", "⚠  Ollama is not running — cannot process natural language.".yellow().bold());
+        eprintln!("   {}", "Start it:  ollama serve".dimmed());
+        eprintln!("   {}", format!("Then pull: ollama pull {model}").dimmed());
+        eprintln!("   {}", "Not installed? https://ollama.com".dimmed());
+        eprintln!("   {}", "For SQL: pipetable ask \"SELECT ...\" ~/data/".dimmed());
         return Ok(());
     }
 
@@ -192,7 +211,9 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
         println!("{}", state.query(line));
     } else {
         if !ollama_ok {
-            println!("{}", "Ollama is not running — SQL only mode. Type .help for commands.".yellow());
+            println!("{}", "⚠  Ollama is not running — natural language disabled.".yellow());
+            println!("   {}", "Run: ollama serve".dimmed());
+            println!("   {}", "Or type a SQL query: SELECT ...".dimmed());
             return;
         }
         let schema = state.schema_prompt();
