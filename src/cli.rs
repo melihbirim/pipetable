@@ -37,10 +37,12 @@ Tips:
 
 struct CliHelper {
     file_completer: FilenameCompleter,
+    dataset_names: Vec<String>,
 }
 
 impl CliHelper {
-    fn new() -> Self { Self { file_completer: FilenameCompleter::new() } }
+    fn new() -> Self { Self { file_completer: FilenameCompleter::new(), dataset_names: vec![] } }
+    fn update_datasets(&mut self, names: Vec<String>) { self.dataset_names = names; }
 }
 
 impl Helper for CliHelper {}
@@ -63,9 +65,27 @@ impl Completer for CliHelper {
             }
         }
 
-        // Path completion after .scan or .schema
-        if line.starts_with(".scan ") || line.starts_with(".schema ") {
+        // Path completion after .scan
+        if line.starts_with(".scan ") {
             return self.file_completer.complete(line, pos, ctx);
+        }
+
+        // Dataset name completion after .schema, FROM, JOIN
+        let prefix = &line[..pos];
+        let upper = prefix.to_uppercase();
+        let name_start = [" FROM ", " JOIN ", ".schema "]
+            .iter()
+            .filter_map(|kw| upper.rfind(kw).map(|i| i + kw.len()))
+            .max();
+        if let Some(start) = name_start {
+            let partial = &prefix[start..];
+            let matches: Vec<Pair> = self.dataset_names.iter()
+                .filter(|n| n.to_lowercase().starts_with(&partial.to_lowercase()))
+                .map(|n| Pair { display: n.clone(), replacement: n.clone() })
+                .collect();
+            if !matches.is_empty() {
+                return Ok((start, matches));
+            }
         }
 
         Ok((pos, vec![]))
@@ -129,7 +149,9 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
     eprintln!();
 
     let mut rl = Editor::<CliHelper, DefaultHistory>::new()?;
-    rl.set_helper(Some(CliHelper::new()));
+    let mut helper = CliHelper::new();
+    helper.update_datasets(state.datasets.keys().cloned().collect());
+    rl.set_helper(Some(helper));
     let prompt = format!("{} ", ">".bright_yellow().bold());
 
     loop {
@@ -139,6 +161,10 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
                 if line.is_empty() { continue; }
                 let _ = rl.add_history_entry(&line);
                 handle_input(&line, &mut state, &mut current_model, ollama_ok).await;
+                // keep completer in sync with loaded datasets
+                if let Some(h) = rl.helper_mut() {
+                    h.update_datasets(state.datasets.keys().cloned().collect());
+                }
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
             Err(e) => return Err(e.into()),

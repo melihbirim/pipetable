@@ -23,6 +23,7 @@ pub struct DatasetInfo {
     pub columns: Vec<ColumnInfo>,
     pub row_count: i64,
     pub size_bytes: u64,
+    pub modified_secs: u64,
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -179,7 +180,9 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
     }
 
     // ── Phase 3: register each file with timing ───────────────────────────────
-    let mut ok = 0usize;
+    let mut added = 0usize;
+    let mut updated = 0usize;
+    let mut unchanged = 0usize;
     let mut skip = 0usize;
     const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
@@ -191,14 +194,29 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
 
         let name = sanitize(&path.file_stem().and_then(|s| s.to_str()).unwrap_or("file"));
         let path_str = path.to_string_lossy().to_string();
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let meta = std::fs::metadata(path).ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified_secs = meta.as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         if size > MAX_FILE_SIZE {
-            emit(format!("  {}  {}  {}", "✗".red(), name.dimmed(), "too large".dimmed()));
+            emit(format!("  {}  {}  {}", "✗".red(), truncate_pad(&name, 36).dimmed(), "too large".dimmed()));
             skip += 1;
             continue;
         }
 
+        // Skip if already loaded with identical size + mtime
+        if let Some(existing) = s.datasets.get(&name) {
+            if existing.size_bytes == size && existing.modified_secs == modified_secs {
+                unchanged += 1;
+                continue;
+            }
+        }
+
+        let is_update = s.datasets.contains_key(&name);
         let t = std::time::Instant::now();
         let view_result = match ext.as_str() {
             "csv" | "tsv" => create_csv_view(&s.conn, &path_str, &name),
@@ -222,38 +240,37 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
             Ok(()) => {
                 let columns = describe(&s.conn, &name).unwrap_or_default();
                 let ncols = columns.len();
-                let col_name  = truncate_pad(&name, 36);
-                let col_ncols = format!("{:>4} cols", ncols);
-                let col_size  = format!("{:>8}", fmt_bytes(size));
-                let col_ms    = format!("{:>6}ms", ms);
+                let tag = if is_update { "updated".yellow() } else { "new".green() };
                 emit(format!(
-                    "  {}  {}  {}  {}  {}",
+                    "  {}  {}  {}  {}  {}  {}",
                     "✓".green(),
-                    col_name.bold(),
-                    col_ncols.dimmed(),
-                    col_size.dimmed(),
-                    col_ms.dimmed(),
+                    truncate_pad(&name, 36).bold(),
+                    format!("{:>4} cols", ncols).dimmed(),
+                    format!("{:>8}", fmt_bytes(size)).dimmed(),
+                    format!("{:>6}ms", ms).dimmed(),
+                    tag,
                 ));
                 s.datasets.insert(name.clone(), DatasetInfo {
-                    name, path: path_str, format: ext, columns, row_count: -1, size_bytes: size,
+                    name, path: path_str, format: ext, columns, row_count: -1,
+                    size_bytes: size, modified_secs,
                 });
-                ok += 1;
+                if is_update { updated += 1; } else { added += 1; }
             }
             Err(e) => {
-                let col_name = truncate_pad(&name, 36);
-                emit(format!("  {}  {}  {}", "✗".red(), col_name.dimmed(), e.dimmed()));
+                emit(format!("  {}  {}  {}", "✗".red(), truncate_pad(&name, 36).dimmed(), e.dimmed()));
                 skip += 1;
             }
         }
     }
 
-    let done = if skip > 0 {
-        format!("{} {} registered, {} skipped", "Done.".green().bold(), ok, skip)
-    } else {
-        format!("{} {} registered", "Done.".green().bold(), ok)
-    };
-    emit(format!("\n{done}"));
+    let mut parts = vec![];
+    if added > 0   { parts.push(format!("{} new", added)); }
+    if updated > 0 { parts.push(format!("{} updated", updated)); }
+    if unchanged > 0 { parts.push(format!("{} unchanged", unchanged).dimmed().to_string()); }
+    if skip > 0    { parts.push(format!("{} skipped", skip).yellow().to_string()); }
+    emit(format!("\n{}  {}", "Done.".green().bold(), parts.join("  ")));
 
+    let ok = added + updated;
     let mut out = format!("Scanned {folder}. {ok} dataset(s) registered.\n");
     for ds in s.datasets.values() {
         out.push_str(&format!("  {} ({}, {})\n", ds.name, ds.format.to_uppercase(), fmt_bytes(ds.size_bytes)));
