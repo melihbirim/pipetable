@@ -14,23 +14,30 @@ use crate::ollama;
 
 const HELP: &str = r#"
 Commands:
-  .scan <path>     Load a folder or file (Tab to complete path)
+  .scan <path>     Load a folder or file (Tab completes paths)
   .datasets        List loaded datasets
-  .schema <name>   Show schema for a dataset
+  .schema <name>   Show columns + sample rows (Tab completes names)
   .models          List available Ollama models
   .model <name>    Switch model
   .help            Show this help
   .quit / Ctrl+D   Exit
 
-Querying:
+Querying — SQL:
   SELECT region, SUM(revenue) FROM sales GROUP BY 1
-  show me top 5 customers by revenue        ← natural language (requires Ollama)
-  who had the highest sales last month?     ← Ollama generates the SQL for you
+  SELECT * FROM orders WHERE amount > 1000 LIMIT 20
+
+Querying — natural language (requires Ollama):
+  show me top 5 customers by revenue
+  sales: how many rows are there?           ← focus one table
+  sales,orders: compare revenue to orders  ← focus multiple tables
+
+  Prefix with "table:" to send only that schema to the model.
+  Without a prefix all loaded tables are included.
 
 Tips:
-  · SQL is detected automatically — no prefix needed
-  · Natural language requires Ollama: https://ollama.com
-  · Use Tab to complete .scan paths
+  · Re-scanning a folder only reloads new or changed files
+  · Tab completes dataset names after FROM, JOIN, .schema
+  · Natural language requires Ollama running: ollama serve
 "#;
 
 // ─── Tab completion + readline helper ────────────────────────────────────────

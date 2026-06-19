@@ -27,7 +27,7 @@ cargo install pipetable
 pipetable ~/data/
 ```
 
-Type natural language or SQL at the `>` prompt. Requires [Ollama](https://ollama.com) for NL queries — SQL always works without it.
+Type SQL or natural language at the `>` prompt. SQL runs directly; natural language requires [Ollama](https://ollama.com).
 
 ```
 > show me total revenue by region
@@ -47,13 +47,39 @@ name   MAX(revenue)
 Carol  91000
 ```
 
+**Focus a specific table** when your folder has many unrelated files:
+
+```
+> sales: show me revenue by region
+> sales,orders: compare revenue to order count
+```
+
+The prefix (`table:`) sends only that table's schema to the model. Without a prefix all loaded tables are included.
+
+**Re-scanning is incremental** — only new or changed files are reloaded:
+
+```
+> .scan ~/data/
+Found 47 files  (30×CSV  12×JSON  5×Parquet)
+  ✓  new_export.csv   8 cols  2.3MB  45ms  new
+  ✓  orders.csv      12 cols  4.1MB  32ms  updated
+
+Done.  2 new  1 updated  44 unchanged
+```
+
+**Tab completion:**
+- `.scan ~/Do` → completes filesystem paths
+- `SELECT * FROM sal` → completes loaded dataset names
+- `.schema ord` → completes dataset names
+- `.sc` → completes dot commands
+
 Dot commands:
 
 | Command | Description |
 |---|---|
-| `.scan <path>` | Load a folder or file |
+| `.scan <path>` | Load a folder or file (Tab completes path) |
 | `.datasets` | List loaded datasets |
-| `.schema <name>` | Show schema for a dataset |
+| `.schema <name>` | Show columns + sample rows (Tab completes name) |
 | `.models` | List available Ollama models |
 | `.model <name>` | Switch model |
 | `.help` | Show help |
@@ -63,6 +89,7 @@ Dot commands:
 
 ```sh
 pipetable ask "who has the highest revenue?" ~/data/
+pipetable ask "sales: show me revenue by region" ~/data/
 pipetable ask "SELECT * FROM sales LIMIT 5" ~/data/
 ```
 
