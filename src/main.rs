@@ -47,10 +47,7 @@ async fn main() -> Result<()> {
         Some(Command::Mcp) => {
             // MCP speaks JSON over stdio — no ANSI in output
             colored::control::set_override(false);
-            eprintln!("Pipetable MCP Server  https://pipetable.com");
-            eprintln!("Free for individuals and teams <= 5 people.");
-            eprintln!("Commercial license required for 5+ people: https://pipetable.com/license");
-            eprintln!();
+            eprintln!("Pipetable MCP Server — pipetable.com/license");
             McpServer::new()?.serve(stdio()).await?.waiting().await?;
         }
         Some(Command::Ask { question, path }) => {

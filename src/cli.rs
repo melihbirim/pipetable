@@ -14,13 +14,17 @@ use crate::ollama;
 
 const HELP: &str = r#"
 Commands:
-  .scan <path>     Load a folder or file (Tab completes paths)
-  .datasets        List loaded datasets
-  .schema <name>   Show columns + sample rows (Tab completes names)
-  .models          List available Ollama models
-  .model <name>    Switch model
-  .help            Show this help
-  .quit / Ctrl+D   Exit
+  .scan <path>       Load a folder or file (Tab completes paths)
+  .datasets          List loaded datasets
+  .schema <name>     Show columns + sample rows (Tab completes names)
+  .drop <name>       Remove a dataset from the session (Tab completes names)
+  .use <n1> <n2>…    Focus NL queries on specific datasets (Tab completes)
+  .remove <name>     Remove a dataset from focus (Tab completes active)
+  .clear             Clear focus — NL queries use all loaded datasets
+  .models            List available Ollama models
+  .model <name>      Switch model
+  .help              Show this help
+  .quit / Ctrl+D     Exit
 
 Querying — SQL:
   SELECT region, SUM(revenue) FROM sales GROUP BY 1
@@ -28,15 +32,14 @@ Querying — SQL:
 
 Querying — natural language (requires Ollama):
   show me top 5 customers by revenue
-  how many rows are there?
   which region had the highest sales last month?
 
-  Relevant tables are selected automatically based on your question.
-  Mention a column or concept and the right table is used.
+  Without .use, the most relevant tables are auto-selected from your question.
+  Use .use to pin specific datasets when you know what you're working with.
 
 Tips:
   · Re-scanning a folder only reloads new or changed files
-  · Tab completes dataset names after FROM, JOIN, .schema
+  · Tab completes dataset names after .use, .remove, FROM, JOIN, .schema
   · Natural language requires Ollama running: ollama serve
 "#;
 
@@ -48,7 +51,9 @@ struct CliHelper {
 }
 
 impl CliHelper {
-    fn new() -> Self { Self { file_completer: FilenameCompleter::new(), dataset_names: vec![] } }
+    fn new() -> Self {
+        Self { file_completer: FilenameCompleter::new(), dataset_names: vec![] }
+    }
     fn update_datasets(&mut self, names: Vec<String>) { self.dataset_names = names; }
 }
 
@@ -61,7 +66,8 @@ impl Completer for CliHelper {
         // Dot-command completion (no space yet = still typing the command)
         if line.starts_with('.') && !line.contains(' ') {
             const CMDS: &[&str] = &[
-                ".scan ", ".datasets", ".schema ", ".models", ".model ", ".help", ".quit",
+                ".scan ", ".datasets", ".schema ", ".drop ", ".use ", ".remove ", ".clear",
+                ".models", ".model ", ".help", ".quit",
             ];
             let matches: Vec<Pair> = CMDS.iter()
                 .filter(|c| c.trim_end().starts_with(line))
@@ -77,18 +83,25 @@ impl Completer for CliHelper {
             return self.file_completer.complete(line, pos, ctx);
         }
 
-        // Dataset name completion after .schema, FROM, JOIN
+        // Dataset name completion after .schema, .use, FROM, JOIN
         let prefix = &line[..pos];
         let upper = prefix.to_uppercase();
-        let name_start = [" FROM ", " JOIN ", ".schema "]
+        let name_start = [" FROM ", " JOIN ", ".schema ", ".drop ", ".use "]
             .iter()
             .filter_map(|kw| upper.rfind(kw).map(|i| i + kw.len()))
             .max();
         if let Some(start) = name_start {
             let partial = &prefix[start..];
+            // For .use, exclude names already on the same line
+            let already: Vec<&str> = if line.starts_with(".use ") {
+                line[".use ".len()..pos].split_whitespace().collect()
+            } else {
+                vec![]
+            };
             let matches: Vec<Pair> = self.dataset_names.iter()
                 .filter(|n| n.to_lowercase().starts_with(&partial.to_lowercase()))
-                .map(|n| Pair { display: n.clone(), replacement: n.clone() })
+                .filter(|n| !already.contains(&n.as_str()))
+                .map(|n| Pair { display: n.clone(), replacement: format!("{} ", n) })
                 .collect();
             if !matches.is_empty() {
                 return Ok((start, matches));
@@ -135,12 +148,14 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
         eprintln!();
     }
 
+    let example = state.datasets.keys().next().cloned().unwrap_or_else(|| "mytable".to_string());
+
     if ollama_ok {
         eprintln!("{} {}", "Model:".dimmed(), current_model.dimmed());
         eprintln!();
         eprintln!("{}", "Ask anything:".dimmed());
-        eprintln!("  {}", "show me total revenue by region".bright_white());
-        eprintln!("  {}", "SELECT * FROM sales LIMIT 10".bright_white());
+        eprintln!("  {}", format!("show me top 10 rows from {example}").bright_white());
+        eprintln!("  {}", format!("SELECT * FROM {example} LIMIT 10").bright_white());
         eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
     } else {
         eprintln!("{}", "⚠  Ollama not running — natural language queries disabled.".yellow().bold());
@@ -149,8 +164,7 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
         eprintln!("   {}", "Not installed? https://ollama.com".dimmed());
         eprintln!();
         eprintln!("{}", "SQL still works:".dimmed());
-        eprintln!("  {}", "SELECT * FROM sales LIMIT 10".bright_white());
-        eprintln!("  {}", "SELECT region, COUNT(*) FROM orders GROUP BY 1".bright_white());
+        eprintln!("  {}", format!("SELECT * FROM {example} LIMIT 10").bright_white());
         eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
     }
     eprintln!();
@@ -159,16 +173,21 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
     let mut helper = CliHelper::new();
     helper.update_datasets(state.datasets.keys().cloned().collect());
     rl.set_helper(Some(helper));
-    let prompt = format!("{} ", ">".bright_yellow().bold());
+
+    let mut use_context: Vec<String> = vec![];
 
     loop {
+        let prompt = if use_context.is_empty() {
+            format!("{} ", ">".bright_yellow().bold())
+        } else {
+            format!("[{}]{} ", use_context.join(" ").dimmed(), ">".bright_yellow().bold())
+        };
         match rl.readline(&prompt) {
             Ok(line) => {
                 let line = line.trim().to_string();
                 if line.is_empty() { continue; }
                 let _ = rl.add_history_entry(&line);
-                handle_input(&line, &mut state, &mut current_model, ollama_ok).await;
-                // keep completer in sync with loaded datasets
+                handle_input(&line, &mut state, &mut current_model, ollama_ok, &mut use_context).await;
                 if let Some(h) = rl.helper_mut() {
                     h.update_datasets(state.datasets.keys().cloned().collect());
                 }
@@ -194,7 +213,7 @@ pub async fn ask(question: &str, path: Option<&str>, model: Option<&str>) -> Res
         return Ok(());
     }
 
-    let schema = state.schema_prompt(question);
+    let (schema, _) = state.schema_prompt(question, &[]);
     if schema.is_empty() {
         eprintln!("No datasets loaded. Pass a path: pipetable ask \"...\" ~/data/");
         return Ok(());
@@ -219,7 +238,13 @@ pub async fn ask(question: &str, path: Option<&str>, model: Option<&str>) -> Res
 
 // ─── Input dispatch ───────────────────────────────────────────────────────────
 
-async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_ok: bool) {
+async fn handle_input(
+    line: &str,
+    state: &mut State,
+    model: &mut String,
+    ollama_ok: bool,
+    use_context: &mut Vec<String>,
+) {
     if let Some(rest) = line.strip_prefix(".scan ") {
         state.scan_verbose(rest.trim(), true);
         println!();
@@ -227,6 +252,38 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
         println!("{}", state.list());
     } else if let Some(rest) = line.strip_prefix(".schema ") {
         println!("{}", state.schema(rest.trim()));
+    } else if let Some(rest) = line.strip_prefix(".drop ") {
+        println!("{}", state.drop_dataset(rest.trim()));
+    } else if let Some(rest) = line.strip_prefix(".use ") {
+        let names: Vec<String> = rest.split_whitespace()
+            .filter(|n| state.datasets.contains_key(*n))
+            .map(String::from)
+            .collect();
+        let unknown: Vec<&str> = rest.split_whitespace()
+            .filter(|n| !state.datasets.contains_key(*n))
+            .collect();
+        if !unknown.is_empty() {
+            println!("{} {}", "Unknown:".yellow(), unknown.join(", "));
+        }
+        if !names.is_empty() {
+            *use_context = names;
+            println!("{} {}", "Context:".dimmed(), use_context.iter().map(|n| n.as_str().bright_white().to_string()).collect::<Vec<_>>().join(", "));
+        }
+    } else if let Some(rest) = line.strip_prefix(".remove ") {
+        let name = rest.trim();
+        if let Some(pos) = use_context.iter().position(|n| n == name) {
+            use_context.remove(pos);
+            if use_context.is_empty() {
+                println!("{}", "Context cleared — using all loaded datasets.".dimmed());
+            } else {
+                println!("{} {}", "Context:".dimmed(), use_context.iter().map(|n| n.as_str().bright_white().to_string()).collect::<Vec<_>>().join(", "));
+            }
+        } else {
+            println!("{} {} {}", name.yellow(), "is not in context.".dimmed(), if use_context.is_empty() { "No active context." } else { "Use .use to add it." });
+        }
+    } else if line == ".clear" {
+        use_context.clear();
+        println!("{}", "Context cleared — using all loaded datasets.".dimmed());
     } else if line == ".models" {
         match ollama::list_models().await {
             Ok(m) if m.is_empty() => println!("{}", format!("No models. Try: ollama pull {}", ollama::DEFAULT_MODEL).yellow()),
@@ -242,6 +299,8 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
         std::process::exit(0);
     } else if is_sql(line) {
         println!("{}", state.query(line));
+        state.save_as_last(line);
+        println!("{}", "→ piped as _last".dimmed());
     } else {
         if !ollama_ok {
             println!("{}", "⚠  Ollama is not running — natural language disabled.".yellow());
@@ -250,15 +309,20 @@ async fn handle_input(line: &str, state: &mut State, model: &mut String, ollama_
             return;
         }
 
-        let schema = state.schema_prompt(line);
+        let (schema, used) = state.schema_prompt(line, use_context);
         if schema.is_empty() {
             println!("{}", "No datasets loaded. Use .scan <path> first.".yellow());
             return;
         }
+        let label = if !use_context.is_empty() { "Context:" } else { "Using:" };
+        println!("{} {}", label.dimmed(), used.iter().map(|n| n.as_str().bright_white().to_string()).collect::<Vec<_>>().join(", "));
+
         match ollama::nl_to_sql(line, &schema, model).await {
             Ok(sql) if !sql.is_empty() => {
                 println!();
                 println!("{}", state.query(&sql));
+                state.save_as_last(&sql);
+                println!("{}", "→ piped as _last".dimmed());
             }
             Ok(_) => println!("{}", "(no SQL generated)".dimmed()),
             Err(e) => println!("{} {e}", "Ollama error:".red().bold()),

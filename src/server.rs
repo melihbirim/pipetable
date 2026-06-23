@@ -103,7 +103,7 @@ impl McpServer {
         self.run(move |s| s.schema(&p.name)).await
     }
 
-    #[tool(description = "Execute SQL against registered datasets. Dataset names are table names. Results are real data from DuckDB - not generated. Cap: 500 rows / 5MB.")]
+    #[tool(description = "Execute SQL against registered datasets. Dataset names are table names. Results are real data from DuckDB - not generated. Cap: 500 rows / 5MB. Result is also saved as _last for chaining.")]
     async fn execute_sql(&self, Parameters(p): Parameters<ExecuteSqlParams>) -> String {
         self.run(move |s| {
             if s.datasets.is_empty() {
@@ -111,7 +111,10 @@ impl McpServer {
             }
             let sql = ensure_limit(&p.sql, 500);
             match run_query(&s.conn, &sql) {
-                Ok((cols, rows)) => format!("{} row(s)\n\n{}", rows.len(), fmt_table(&cols, &rows)),
+                Ok((cols, rows)) => {
+                    s.save_as_last(&p.sql);
+                    format!("{} row(s)\n\n{}", rows.len(), fmt_table(&cols, &rows))
+                }
                 Err(e) => format!("SQL error: {e}"),
             }
         })

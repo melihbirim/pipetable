@@ -38,10 +38,6 @@ impl State {
         Ok(Self { conn: Connection::open_in_memory()?, datasets: HashMap::new() })
     }
 
-    pub fn scan(&mut self, folder: &str) -> String {
-        do_scan(self, folder, None, false)
-    }
-
     pub fn scan_verbose(&mut self, folder: &str, interactive: bool) {
         do_scan(self, folder, Some(&|msg: &str| eprintln!("{msg}")), interactive);
     }
@@ -109,48 +105,90 @@ impl State {
         }
     }
 
-    /// Compact schema string for LLM prompts.
-    /// Auto-selects relevant tables by scoring keyword overlap with the question.
-    /// Falls back to all tables if nothing scores > 0.
-    pub fn schema_prompt(&self, question: &str) -> String {
-        if self.datasets.is_empty() { return String::new(); }
+    pub fn drop_dataset(&mut self, name: &str) -> String {
+        if !self.datasets.contains_key(name) {
+            return format!("'{}' not found. Run .datasets to see what's loaded.", name);
+        }
+        let _ = self.conn.execute_batch(&format!("DROP VIEW IF EXISTS \"{name}\""));
+        self.datasets.remove(name);
+        format!("Dropped '{name}'.")
+    }
 
-        // Tokenize question: meaningful words only (len > 2, alphanumeric)
-        let q_words: Vec<String> = question
-            .split(|c: char| !c.is_alphanumeric())
-            .map(|w| w.to_lowercase())
-            .filter(|w| w.len() > 2)
-            .collect();
+    /// Save the last query as a DuckDB view named `_last` so subsequent queries can pipe from it.
+    /// Strips any trailing LIMIT so the view captures the full filter, not the display slice.
+    pub fn save_as_last(&mut self, sql: &str) {
+        let sql = sql.trim().trim_end_matches(';');
+        if sql.to_uppercase().contains("_LAST") { return; } // avoid circular views
 
-        // Score each table: count matching tokens in name + column names
-        let mut scored: Vec<(&DatasetInfo, usize)> = self.datasets.values().map(|ds| {
-            let haystack = format!(
-                "{} {}",
-                ds.name.to_lowercase(),
-                ds.columns.iter().map(|c| c.name.to_lowercase()).collect::<Vec<_>>().join(" ")
-            );
-            let score = q_words.iter().filter(|w| haystack.contains(w.as_str())).count();
-            (ds, score)
-        }).collect();
-
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-
-        // Use tables with score > 0; if none match, use all
-        let relevant: Vec<&DatasetInfo> = if scored.iter().any(|(_, s)| *s > 0) {
-            scored.iter().filter(|(_, s)| *s > 0).map(|(ds, _)| *ds).collect()
-        } else {
-            scored.iter().map(|(ds, _)| *ds).collect()
+        // Strip trailing bare LIMIT N
+        let view_sql = {
+            let upper = sql.to_uppercase();
+            if let Some(pos) = upper.rfind(" LIMIT ") {
+                let suffix = sql[pos + 7..].trim();
+                if suffix.chars().all(|c| c.is_ascii_digit()) { &sql[..pos] } else { sql }
+            } else { sql }
         };
 
+        let ddl = format!("CREATE OR REPLACE VIEW \"_last\" AS {view_sql}");
+        if self.conn.execute_batch(&ddl).is_ok() {
+            let cols = describe(&self.conn, "_last").unwrap_or_default();
+            self.datasets.insert("_last".into(), DatasetInfo {
+                name: "_last".into(),
+                path: "(piped result)".into(),
+                format: "pipe".into(),
+                columns: cols,
+                row_count: -1,
+                size_bytes: 0,
+                modified_secs: 0,
+            });
+        }
+    }
+
+    /// Compact schema string for LLM prompts.
+    /// If `use_only` is non-empty, include exactly those datasets.
+    /// Otherwise auto-select by keyword scoring against the question.
+    pub fn schema_prompt(&self, question: &str, use_only: &[String]) -> (String, Vec<String>) {
+        if self.datasets.is_empty() { return (String::new(), vec![]); }
+
+        let selected: Vec<&DatasetInfo> = if !use_only.is_empty() {
+            use_only.iter().filter_map(|n| self.datasets.get(n)).collect()
+        } else {
+            let q_words: Vec<String> = question
+                .split(|c: char| !c.is_alphanumeric())
+                .map(|w| w.to_lowercase())
+                .filter(|w| w.len() > 2)
+                .collect();
+
+            let mut scored: Vec<(&DatasetInfo, usize)> = self.datasets.values()
+                .map(|ds| {
+                    let haystack = format!(
+                        "{} {}",
+                        ds.name.to_lowercase(),
+                        ds.columns.iter().map(|c| c.name.to_lowercase()).collect::<Vec<_>>().join(" ")
+                    );
+                    let score = q_words.iter().filter(|w| haystack.contains(w.as_str())).count();
+                    (ds, score)
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+            if scored.iter().any(|(_, s)| *s > 0) {
+                scored.into_iter().filter(|(_, s)| *s > 0).map(|(ds, _)| ds).collect()
+            } else {
+                scored.into_iter().map(|(ds, _)| ds).collect()
+            }
+        };
+
+        let names: Vec<String> = selected.iter().map(|ds| ds.name.clone()).collect();
         let mut out = String::new();
-        for ds in relevant {
+        for ds in selected {
             out.push_str(&format!("Table: {}\nColumns:", ds.name));
             for col in &ds.columns {
                 out.push_str(&format!(" {} ({}),", col.name, col.col_type));
             }
             out.push('\n');
         }
-        out
+        (out, names)
     }
 }
 
@@ -168,10 +206,15 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
 
     let emit = |msg: String| { if let Some(f) = progress { f(&msg); } };
 
+    let not_noise = |e: &walkdir::DirEntry| {
+        let name = e.file_name().to_str().unwrap_or("");
+        !name.starts_with('.') && !matches!(name, "node_modules" | "target" | "__pycache__" | "dist" | "build")
+    };
+
     // ── Phase 1: pre-scan count ───────────────────────────────────────────────
     let mut type_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut total = 0usize;
-    for entry in WalkDir::new(folder).max_depth(3).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(folder).max_depth(3).into_iter().filter_entry(not_noise).filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() { continue; }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -214,7 +257,7 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
     let mut skip = 0usize;
     const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 
-    for entry in WalkDir::new(folder).max_depth(3).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(folder).max_depth(3).into_iter().filter_entry(not_noise).filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() { continue; }
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -480,4 +523,46 @@ pub fn fmt_bytes(b: u64) -> String {
     else if b >= 1 << 20 { format!("{:.1}MB", b as f64 / (1 << 20) as f64) }
     else if b >= 1 << 10 { format!("{:.0}KB", b as f64 / (1 << 10) as f64) }
     else { format!("{b}B") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn pipe_last_strips_limit_and_chains() {
+        let mut state = State::new().unwrap();
+        let dir = std::env::temp_dir().join("pipetable_test_pipe");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sales.csv"), "region,revenue\nEU,1000\nUS,2000\nEU,500\n").unwrap();
+        do_scan(&mut state, dir.to_str().unwrap(), None, false);
+
+        // First query: filter EU rows, save as _last
+        state.save_as_last("SELECT * FROM sales WHERE region = 'EU' LIMIT 100");
+        assert!(state.datasets.contains_key("_last"), "_last not registered");
+
+        // Second query: query _last — should see both EU rows (limit was stripped)
+        let result = state.query("SELECT COUNT(*) AS n FROM _last");
+        assert!(result.contains('2'), "expected 2 EU rows in _last, got: {result}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scan_and_query_csv() {
+        let dir = std::env::temp_dir().join("pipetable_test_scan");
+        fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("sales.csv");
+        fs::write(&csv, "name,revenue\nAlice,1000\nBob,2000\n").unwrap();
+
+        let mut state = State::new().unwrap();
+        do_scan(&mut state, dir.to_str().unwrap(), None, false);
+        assert!(state.datasets.contains_key("sales"), "sales dataset not loaded");
+
+        let result = state.query("SELECT SUM(revenue) AS total FROM sales");
+        assert!(result.contains("3000"), "expected 3000 in result, got: {result}");
+
+        fs::remove_dir_all(&dir).ok();
+    }
 }
