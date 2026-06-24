@@ -129,14 +129,22 @@ pipetable ask "SELECT * FROM sales LIMIT 5" ~/data/
 
 ### Natural language (optional)
 
-Requires [Ollama](https://ollama.com):
+Set any one of these — pipetable auto-detects:
 
 ```sh
-ollama pull qwen2.5-coder:1.5b   # 986 MB, runs on CPU
+# Claude (best quality)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI or any compatible API (LM Studio, Groq, Together, etc.)
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=http://localhost:1234  # optional, for local endpoints
+
+# Ollama (local, no key needed)
+ollama pull qwen2.5-coder:1.5b
 ollama serve
 ```
 
-SQL and MCP work without it.
+Priority: Anthropic → OpenAI-compatible → Ollama. SQL and MCP work without any of them.
 
 ## Supported formats
 
