@@ -1,127 +1,32 @@
 # Pipetable
 
-Query local CSV, Parquet, and JSON files with natural language or SQL. Works as an MCP server (RooCode, Cursor, Claude Code, Copilot) and as a standalone CLI. Powered by DuckDB. Files never leave your machine.
+Gives your AI coding tool real data access. Point it at a folder of CSV, Parquet, JSON, or TSV files — your AI can now query them with real SQL instead of hallucinating.
+
+Works as an MCP server for Claude Code, Cursor, RooCode, and Copilot. Also ships as a standalone CLI for interactive data exploration. Powered by DuckDB. Files never leave your machine.
+
+**MIT licensed.**
 
 ## Install
 
-**macOS / Linux**
 ```sh
+# macOS / Linux
 curl -fsSL https://pipetable.com/install | sh
-```
 
-**Windows (PowerShell)**
-```powershell
+# Windows
 irm https://pipetable.com/install.ps1 | iex
-```
 
-**cargo install**
-```sh
+# Rust
 cargo install pipetable
 ```
 
-## Usage
+## MCP server setup
 
-### Interactive REPL
-
+### Claude Code
 ```sh
-pipetable ~/data/
+claude mcp add pipetable pipetable mcp
 ```
 
-Type SQL or natural language at the `>` prompt. SQL runs directly; natural language requires [Ollama](https://ollama.com).
-
-```
-> show me total revenue by region
-Thinking.....
-SELECT region, SUM(revenue) AS total FROM sales GROUP BY region
-
-region  total
---------------
-EU      141000
-US       32000
-APAC     17000
-
-> SELECT name, MAX(revenue) FROM sales GROUP BY name ORDER BY 2 DESC LIMIT 1
-1 row(s)
-name   MAX(revenue)
---------------------
-Carol  91000
-```
-
-**Relevant tables are selected automatically.** When your folder has many unrelated files, pipetable scores each table by matching your question's keywords against table names and column names — only the best-matching tables are sent to the model.
-
-```
-> show me revenue by region       ← auto-selects the table with a "revenue" column
-> how many products are inactive  ← auto-selects the products table
-```
-
-**Re-scanning is incremental** — only new or changed files are reloaded:
-
-```
-> .scan ~/data/
-Found 47 files  (30×CSV  12×JSON  5×Parquet)
-  ✓  new_export.csv   8 cols  2.3MB  45ms  new
-  ✓  orders.csv      12 cols  4.1MB  32ms  updated
-
-Done.  2 new  1 updated  44 unchanged
-```
-
-**Tab completion:**
-- `.scan ~/Do` → completes filesystem paths
-- `SELECT * FROM sal` → completes loaded dataset names
-- `.schema ord` → completes dataset names
-- `.sc` → completes dot commands
-
-Dot commands:
-
-| Command | Description |
-|---|---|
-| `.scan <path>` | Load a folder or file (Tab completes path) |
-| `.datasets` | List loaded datasets |
-| `.schema <name>` | Show columns + sample rows (Tab completes name) |
-| `.models` | List available Ollama models |
-| `.model <name>` | Switch model |
-| `.help` | Show help |
-| `.quit` | Exit |
-
-### One-shot query
-
-```sh
-pipetable ask "who has the highest revenue?" ~/data/
-pipetable ask "sales: show me revenue by region" ~/data/
-pipetable ask "SELECT * FROM sales LIMIT 5" ~/data/
-```
-
-### MCP server
-
-```sh
-pipetable mcp
-```
-
-Or with a default folder pre-loaded:
-
-```sh
-pipetable ~/data/ mcp
-```
-
-## Natural language setup (optional)
-
-NL queries require [Ollama](https://ollama.com):
-
-```sh
-# Install Ollama
-brew install ollama        # macOS
-# or: https://ollama.com/download
-
-# Pull the model (986 MB, runs on CPU)
-ollama pull qwen2.5-coder:1.5b
-```
-
-SQL queries and the MCP server work without Ollama.
-
-## Configure your AI tool
-
-### RooCode / Cursor
-
+### Cursor / RooCode
 ```json
 {
   "mcpServers": {
@@ -133,14 +38,7 @@ SQL queries and the MCP server work without Ollama.
 }
 ```
 
-### Claude Code
-
-```bash
-claude mcp add pipetable pipetable mcp
-```
-
-### VS Code GitHub Copilot
-
+### VS Code (Copilot)
 ```json
 {
   "servers": {
@@ -153,16 +51,97 @@ claude mcp add pipetable pipetable mcp
 }
 ```
 
-## MCP tools
+Once configured, your AI can:
+1. `scan_folder` — register all data files in a folder
+2. `list_datasets` — see schemas and column types
+3. `get_schema` — inspect a specific table with sample rows
+4. `execute_sql` — run real DuckDB SQL against your files
 
-| Tool | Description |
+Results are ground truth from DuckDB, not generated.
+
+## CLI
+
+```sh
+pipetable ~/data/
+```
+
+SQL and natural language at the `>` prompt. SQL always works. Natural language requires [Ollama](https://ollama.com) running locally.
+
+```
+> SELECT region, SUM(revenue) AS total FROM sales GROUP BY 1 ORDER BY 2 DESC
+
+4 row(s)
+
+region  total
+─────────────
+EU      141000
+US       32000
+APAC     17000
+```
+
+```
+> show me top 5 customers by revenue
+Using: customers, sales
+Thinking.....
+SELECT c.name, SUM(s.revenue) AS total FROM customers c
+JOIN sales s ON s.customer_id = c.id
+GROUP BY c.name ORDER BY total DESC LIMIT 5
+...
+→ piped as _last
+```
+
+### Piping results
+
+Every query saves its result as `_last` — a live DuckDB view you can query further:
+
+```
+> SELECT * FROM sales WHERE region = 'EU'
+...
+→ piped as _last
+
+> show me top 3 from _last
+Using: _last
+Thinking.....
+```
+
+### Dot commands
+
+| Command | Description |
 |---|---|
-| `scan_folder` | Register all data files in a folder (CSV, Parquet, JSON, TSV) |
-| `list_datasets` | List registered datasets with column types |
-| `get_schema` | Full schema + 3 sample rows for a dataset |
-| `execute_sql` | Run SQL against registered datasets via DuckDB |
+| `.scan <path>` | Load a folder or file (Tab completes) |
+| `.datasets` | List loaded datasets |
+| `.schema <name>` | Columns + sample rows |
+| `.drop <name>` | Remove a dataset from the session |
+| `.use <n1> <n2>` | Focus NL queries on specific datasets |
+| `.remove <name>` | Remove from focus |
+| `.clear` | Reset focus to all datasets |
+| `.model <name>` | Switch Ollama model |
+| `.help` | Show help |
+
+Tab completes dataset names after `FROM`, `JOIN`, `.schema`, `.drop`, `.use`.
+
+### One-shot query
+
+```sh
+pipetable ask "who has the highest revenue?" ~/data/
+pipetable ask "SELECT * FROM sales LIMIT 5" ~/data/
+```
+
+### Natural language (optional)
+
+Requires [Ollama](https://ollama.com):
+
+```sh
+ollama pull qwen2.5-coder:1.5b   # 986 MB, runs on CPU
+ollama serve
+```
+
+SQL and MCP work without it.
+
+## Supported formats
+
+CSV, Parquet, JSON, NDJSON, TSV. Files up to 2GB. Folders scanned up to 3 levels deep. Hidden files and common noise directories (`node_modules`, `target`, `.git`) are skipped automatically.
 
 ## License
 
-Free for individuals and teams of up to 5 people.  
-Commercial license required for organizations of 5+ people: https://pipetable.com/license
+[MIT](LICENSE)
