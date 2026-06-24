@@ -18,8 +18,8 @@ struct Cli {
     /// Data file or folder to load into the REPL
     path: Option<String>,
 
-    /// Ollama model to use for natural language queries
-    #[arg(long, short, default_value = "qwen2.5-coder:1.5b")]
+    /// Model override for NL queries (auto-detected from ANTHROPIC_API_KEY / OPENAI_API_KEY / Ollama)
+    #[arg(long, short, default_value = "")]
     model: String,
 
     #[command(subcommand)]

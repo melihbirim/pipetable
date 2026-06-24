@@ -136,8 +136,11 @@ impl Validator for CliHelper {}
 
 pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
     let mut state = State::new()?;
-    let mut current_model = model.unwrap_or(ollama::DEFAULT_MODEL).to_string();
-    let ollama_ok = ollama::is_available().await;
+    let mut current_model = model
+        .filter(|m| !m.is_empty())
+        .unwrap_or(ollama::default_model())
+        .to_string();
+    let llm_ok = ollama::provider_available().await;
 
     eprintln!("{} {}", "Pipetable".bright_yellow().bold(), "https://pipetable.com".dimmed());
     eprintln!("{}", "DuckDB query engine · local files only".dimmed());
@@ -150,18 +153,17 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
 
     let example = state.datasets.keys().next().cloned().unwrap_or_else(|| "mytable".to_string());
 
-    if ollama_ok {
-        eprintln!("{} {}", "Model:".dimmed(), current_model.dimmed());
+    if llm_ok {
+        eprintln!("{} {}", "Provider:".dimmed(), ollama::provider_label().dimmed());
         eprintln!();
         eprintln!("{}", "Ask anything:".dimmed());
         eprintln!("  {}", format!("show me top 10 rows from {example}").bright_white());
         eprintln!("  {}", format!("SELECT * FROM {example} LIMIT 10").bright_white());
         eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
     } else {
-        eprintln!("{}", "⚠  Ollama not running — natural language queries disabled.".yellow().bold());
-        eprintln!("   {}", "Start it:  ollama serve".dimmed());
-        eprintln!("   {}", format!("Then pull: ollama pull {}", ollama::DEFAULT_MODEL).dimmed());
-        eprintln!("   {}", "Not installed? https://ollama.com".dimmed());
+        eprintln!("{}", "⚠  No LLM available — natural language queries disabled.".yellow().bold());
+        eprintln!("   {}", "Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or start Ollama:".dimmed());
+        eprintln!("   {}", format!("  ollama serve && ollama pull {}", ollama::DEFAULT_MODEL).dimmed());
         eprintln!();
         eprintln!("{}", "SQL still works:".dimmed());
         eprintln!("  {}", format!("SELECT * FROM {example} LIMIT 10").bright_white());
@@ -187,7 +189,7 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
                 let line = line.trim().to_string();
                 if line.is_empty() { continue; }
                 let _ = rl.add_history_entry(&line);
-                handle_input(&line, &mut state, &mut current_model, ollama_ok, &mut use_context).await;
+                handle_input(&line, &mut state, &mut current_model, llm_ok, &mut use_context).await;
                 if let Some(h) = rl.helper_mut() {
                     h.update_datasets(state.datasets.keys().cloned().collect());
                 }
@@ -201,7 +203,7 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
 
 pub async fn ask(question: &str, path: Option<&str>, model: Option<&str>) -> Result<()> {
     let mut state = State::new()?;
-    let model = model.unwrap_or(ollama::DEFAULT_MODEL);
+    let model = model.filter(|m| !m.is_empty()).unwrap_or(ollama::default_model());
 
     if let Some(p) = path {
         state.scan_verbose(p, false);
@@ -219,11 +221,8 @@ pub async fn ask(question: &str, path: Option<&str>, model: Option<&str>) -> Res
         return Ok(());
     }
 
-    if !ollama::is_available().await {
-        eprintln!("{}", "⚠  Ollama is not running — cannot process natural language.".yellow().bold());
-        eprintln!("   {}", "Start it:  ollama serve".dimmed());
-        eprintln!("   {}", format!("Then pull: ollama pull {model}").dimmed());
-        eprintln!("   {}", "Not installed? https://ollama.com".dimmed());
+    if !ollama::provider_available().await {
+        eprintln!("{}", "⚠  No LLM available. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or run ollama serve.".yellow().bold());
         eprintln!("   {}", "For SQL: pipetable ask \"SELECT ...\" ~/data/".dimmed());
         return Ok(());
     }
@@ -242,7 +241,7 @@ async fn handle_input(
     line: &str,
     state: &mut State,
     model: &mut String,
-    ollama_ok: bool,
+    llm_ok: bool,
     use_context: &mut Vec<String>,
 ) {
     if let Some(rest) = line.strip_prefix(".scan ") {
@@ -302,10 +301,8 @@ async fn handle_input(
         state.save_as_last(line);
         println!("{}", "→ piped as _last".dimmed());
     } else {
-        if !ollama_ok {
-            println!("{}", "⚠  Ollama is not running — natural language disabled.".yellow());
-            println!("   {}", "Run: ollama serve".dimmed());
-            println!("   {}", "Or type a SQL query: SELECT ...".dimmed());
+        if !llm_ok {
+            println!("{}", "⚠  No LLM available — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or run ollama serve".yellow());
             return;
         }
 
