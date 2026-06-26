@@ -23,6 +23,8 @@ Commands:
   .clear             Clear focus — NL queries use all loaded datasets
   .models            List available Ollama models
   .model <name>      Switch model
+  .check             Version, stats, and opt-in sharing
+  .feedback          Send feedback or report issues
   .help              Show this help
   .quit / Ctrl+D     Exit
 
@@ -67,7 +69,7 @@ impl Completer for CliHelper {
         if line.starts_with('.') && !line.contains(' ') {
             const CMDS: &[&str] = &[
                 ".scan ", ".datasets", ".schema ", ".drop ", ".use ", ".remove ", ".clear",
-                ".models", ".model ", ".help", ".quit",
+                ".models", ".model ", ".check", ".feedback", ".help", ".quit",
             ];
             let matches: Vec<Pair> = CMDS.iter()
                 .filter(|c| c.trim_end().starts_with(line))
@@ -292,6 +294,10 @@ async fn handle_input(
     } else if let Some(rest) = line.strip_prefix(".model ") {
         *model = rest.trim().to_string();
         println!("{} {}", "Model:".dimmed(), model.bright_white());
+    } else if line == ".check" {
+        handle_check(state).await;
+    } else if line == ".feedback" {
+        handle_feedback(state);
     } else if line == ".help" {
         println!("{HELP}");
     } else if line == ".quit" || line == ".exit" {
@@ -325,6 +331,42 @@ async fn handle_input(
             Err(e) => println!("{} {e}", "Ollama error:".red().bold()),
         }
     }
+}
+
+async fn handle_check(state: &State) {
+    let version = env!("CARGO_PKG_VERSION");
+    println!();
+    println!("  {} Pipetable v{}", "●".bright_yellow().bold(), version.bright_white());
+    println!();
+
+    let n_datasets = state.datasets.len();
+    println!("  {} Datasets: {}", if n_datasets > 0 { "✓".green() } else { "○".dimmed() }, n_datasets);
+
+    println!();
+    println!("  For feedback: {}", "melihbirim@gmail.com".bright_yellow());
+    println!("  GitHub: {}", "github.com/melihbirim/pipetable".dimmed());
+    println!();
+}
+
+fn handle_feedback(state: &State) {
+    let version = env!("CARGO_PKG_VERSION");
+    let os = std::env::consts::OS;
+    let datasets = state.datasets.len();
+
+    let subject = format!("Pipetable v{} feedback ({})", version, os);
+    let body = format!(
+        "Pipetable v{} feedback\n\nOS: {}\nDatasets loaded: {}\n\nYour feedback:\n",
+        version, os, datasets
+    );
+
+    println!();
+    println!("  {} Open your email client and send to: {}", "→".bright_yellow(), "melihbirim@gmail.com".bright_white());
+    println!();
+    println!("  {}", format!("Subject: {}", subject).dimmed());
+    println!("  {}", format!("Body:\n{}", body).dimmed());
+    println!();
+    println!("  Or open: {}", "https://github.com/melihbirim/pipetable/issues".bright_yellow());
+    println!();
 }
 
 fn is_sql(s: &str) -> bool {
