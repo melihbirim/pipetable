@@ -337,6 +337,14 @@ async fn handle_check(state: &State) {
     let version = env!("CARGO_PKG_VERSION");
     println!();
     println!("  {} Pipetable v{}", "●".bright_yellow().bold(), version.bright_white());
+
+    // Check for new version
+    if let Ok(latest) = fetch_latest_version().await {
+        if latest != version && is_newer(&latest, version) {
+            println!("  {} New version: v{}", "↑".bright_yellow(), latest.bright_yellow());
+            println!("     {}", "curl -fsSL https://pipetable.com/install | sh".dimmed());
+        }
+    }
     println!();
 
     let n_datasets = state.datasets.len();
@@ -346,6 +354,36 @@ async fn handle_check(state: &State) {
     println!("  For feedback: {}", "melihbirim@gmail.com".bright_yellow());
     println!("  GitHub: {}", "github.com/melihbirim/pipetable".dimmed());
     println!();
+}
+
+async fn fetch_latest_version() -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .get("https://api.github.com/repos/melihbirim/pipetable/releases/latest")
+        .header("User-Agent", "pipetable-cli")
+        .send()
+        .await
+        .map_err(|_| "fetch failed")?;
+
+    let json: serde_json::Value = resp.json().await.map_err(|_| "parse failed")?;
+    json["tag_name"]
+        .as_str()
+        .ok_or("no tag".into())
+        .map(|s| s.trim_start_matches('v').to_string())
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse_version = |v: &str| -> Vec<u32> {
+        v.split('.').filter_map(|p| p.parse::<u32>().ok()).collect()
+    };
+    let l = parse_version(latest);
+    let c = parse_version(current);
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv { return true; }
+        if lv < cv { return false; }
+    }
+    false
 }
 
 fn handle_feedback(state: &State) {
