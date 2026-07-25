@@ -1,6 +1,6 @@
 # Pipetable
 
-Gives your AI coding tool real data access.
+The local data runtime for AI agents.
 
 ![Pipetable demo](https://github.com/melihbirim/pipetable/raw/main/demo/demo_nlq.gif)
  Point it at a folder of CSV, Parquet, JSON, or TSV files — your AI can now query them with real SQL instead of hallucinating.

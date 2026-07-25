@@ -290,19 +290,19 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
 
         let is_update = s.datasets.contains_key(&name);
         let t = std::time::Instant::now();
-        let view_result = match ext.as_str() {
-            "csv" | "tsv" => create_csv_view(&s.conn, &path_str, &name),
+        let view_result: Result<Option<String>, String> = match ext.as_str() {
+            "csv" | "tsv" => create_csv_view(&s.conn, &path_str, &name).map(|()| None),
             "parquet" => {
                 let safe = path_str.replace('\'', "''");
                 s.conn.execute_batch(&format!(
                     "CREATE OR REPLACE VIEW \"{name}\" AS SELECT * FROM parquet_scan('{safe}')"
-                )).map_err(|e| e.to_string())
+                )).map(|()| None).map_err(|e| e.to_string())
             }
             "json" | "ndjson" => {
                 let safe = path_str.replace('\'', "''");
                 s.conn.execute_batch(&format!(
                     "CREATE OR REPLACE VIEW \"{name}\" AS SELECT * FROM read_json_auto('{safe}')"
-                )).map_err(|e| e.to_string())
+                )).map(|()| None).map_err(|e| e.to_string())
             }
             "xlsx" | "xls" | "xlsm" => load_excel(&s.conn, &path_str, &name),
             _ => continue,
@@ -310,7 +310,7 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
         let ms = t.elapsed().as_millis();
 
         match view_result {
-            Ok(()) => {
+            Ok(warning) => {
                 let columns = describe(&s.conn, &name).unwrap_or_default();
                 let ncols = columns.len();
                 let tag = if is_update { "updated".yellow() } else { "new".green() };
@@ -323,6 +323,9 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
                     format!("{:>6}ms", ms).dimmed(),
                     tag,
                 ));
+                if let Some(w) = warning {
+                    emit(format!("    {}", w.yellow()));
+                }
                 s.datasets.insert(name.clone(), DatasetInfo {
                     name, path: path_str, format: ext, columns, row_count: -1,
                     size_bytes: size, modified_secs,
@@ -373,11 +376,21 @@ pub fn create_csv_view(conn: &Connection, path: &str, name: &str) -> Result<(), 
     Err(last)
 }
 
-pub fn load_excel(conn: &Connection, path: &str, name: &str) -> Result<(), String> {
+/// Loads the first sheet of a workbook. Returns a warning string if other sheets were skipped.
+pub fn load_excel(conn: &Connection, path: &str, name: &str) -> Result<Option<String>, String> {
     let mut wb = open_workbook_auto(path).map_err(|e| format!("Excel error: {e}"))?;
     let sheet_names = wb.sheet_names().to_owned();
-    let sheet = sheet_names.first().ok_or("No sheets found")?;
-    let range = wb.worksheet_range(sheet).map_err(|e| format!("Sheet error: {e}"))?;
+    let sheet = sheet_names.first().ok_or("No sheets found")?.clone();
+    let skipped: Vec<&String> = sheet_names.iter().skip(1).collect();
+    let warning = if skipped.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "loaded sheet '{sheet}' only, skipped: {}",
+            skipped.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        ))
+    };
+    let range = wb.worksheet_range(&sheet).map_err(|e| format!("Sheet error: {e}"))?;
 
     let mut rows = range.rows();
 
@@ -398,7 +411,7 @@ pub fn load_excel(conn: &Connection, path: &str, name: &str) -> Result<(), Strin
 
     // Infer column types: DOUBLE if any numeric, else VARCHAR
     let col_types: Vec<&str> = (0..headers.len()).map(|i| {
-        let numeric = data.iter().any(|r| matches!(r.get(i), Some(Data::Float(_))));
+        let numeric = data.iter().any(|r| matches!(r.get(i), Some(Data::Float(_)) | Some(Data::Int(_))));
         if numeric { "DOUBLE" } else { "VARCHAR" }
     }).collect();
 
@@ -416,6 +429,7 @@ pub fn load_excel(conn: &Connection, path: &str, name: &str) -> Result<(), Strin
         let vals: Vec<String> = (0..headers.len()).map(|i| {
             match row.get(i) {
                 Some(Data::Float(f)) => f.to_string(),
+                Some(Data::Int(n)) => n.to_string(),
                 Some(Data::String(s)) => format!("'{}'", s.replace('\'', "''")),
                 Some(Data::Bool(b)) => (if *b { "true" } else { "false" }).to_string(),
                 _ => "NULL".to_string(),
@@ -432,7 +446,7 @@ pub fn load_excel(conn: &Connection, path: &str, name: &str) -> Result<(), Strin
         conn.execute_batch(&format!("INSERT INTO \"{name}\" VALUES {}", buf.join(",")))
             .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(warning)
 }
 
 pub fn describe(conn: &Connection, name: &str) -> Result<Vec<ColumnInfo>> {
@@ -513,10 +527,10 @@ pub fn val_to_json(v: ValueRef<'_>) -> serde_json::Value {
 
 pub fn fmt_table(cols: &[String], rows: &[Vec<serde_json::Value>]) -> String {
     if cols.is_empty() || rows.is_empty() { return "(no rows)\n".into(); }
-    let mut widths: Vec<usize> = cols.iter().map(|c| c.len()).collect();
+    let mut widths: Vec<usize> = cols.iter().map(|c| c.chars().count()).collect();
     for row in rows {
         for (i, val) in row.iter().enumerate() {
-            if i < widths.len() { widths[i] = widths[i].max(json_str(val).len().min(40)); }
+            if i < widths.len() { widths[i] = widths[i].max(json_str(val).chars().count().min(40)); }
         }
     }
     let mut out = String::new();
@@ -538,7 +552,10 @@ pub fn fmt_table(cols: &[String], rows: &[Vec<serde_json::Value>]) -> String {
         for (i, val) in row.iter().enumerate() {
             let w = if i < widths.len() { widths[i].min(40) } else { 10 };
             let s = json_str(val);
-            let cell = if s.len() > w { format!("{}~", &s[..w.saturating_sub(1)]) } else { s };
+            let cell = if s.chars().count() > w {
+                let head: String = s.chars().take(w.saturating_sub(1)).collect();
+                format!("{}~", head)
+            } else { s };
             let padded = format!("{:width$}  ", cell, width = w);
             let colored = match val {
                 serde_json::Value::Number(_) => padded.bright_cyan().to_string(),
@@ -571,8 +588,9 @@ pub fn ensure_limit(sql: &str, cap: usize) -> String {
 }
 
 pub fn truncate_pad(s: &str, width: usize) -> String {
-    if s.len() > width {
-        format!("{}~", &s[..width - 1])
+    if s.chars().count() > width {
+        let head: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{}~", head)
     } else {
         format!("{:<width$}", s)
     }
