@@ -202,7 +202,7 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
     use std::io::Write;
 
     if !Path::new(folder).exists() {
-        return format!("Path does not exist: {folder}");
+        return format!("Cannot access folder:\n\n{folder}\n\nPossible reasons:\n• The folder does not exist\n• Permission denied\n• The folder was moved or deleted");
     }
 
     let emit = |msg: String| { if let Some(f) = progress { f(&msg); } };
@@ -358,7 +358,7 @@ pub fn do_scan(s: &mut State, folder: &str, progress: Option<&dyn Fn(&str)>, int
 
 pub fn create_csv_view(conn: &Connection, path: &str, name: &str) -> Result<(), String> {
     let norm = path.trim().trim_start_matches("file://").trim_start_matches("file:");
-    if !Path::new(norm).exists() { return Err(format!("File not found: {norm}")); }
+    if !Path::new(norm).exists() { return Err(format!("Cannot open file:\n\n{norm}\n\nPossible reasons:\n• The file does not exist\n• Permission denied\n• The file was moved or deleted")); }
     let safe = norm.replace('\'', "''");
     let attempts = [
         format!("read_csv('{safe}', auto_detect=true)"),
