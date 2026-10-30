@@ -137,6 +137,7 @@ impl Validator for CliHelper {}
 // ─── REPL ────────────────────────────────────────────────────────────────────
 
 pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
+    let latest = tokio::spawn(fetch_latest_version());
     let mut state = State::new()?;
     let mut current_model = model
         .filter(|m| !m.is_empty())
@@ -170,6 +171,15 @@ pub async fn run(path: Option<&str>, model: Option<&str>) -> Result<()> {
         eprintln!("{}", "SQL still works:".dimmed());
         eprintln!("  {}", format!("SELECT * FROM {example} LIMIT 10").bright_white());
         eprintln!("{}", "Use .scan <path> to load files. Tab completes paths. .help for all commands.".dimmed());
+    }
+
+    // ponytail: hits GitHub on every start (60 req/h per IP unauthenticated); cache daily if that ever bites
+    if let Ok(Ok(Ok(latest))) = tokio::time::timeout(std::time::Duration::from_millis(1500), latest).await {
+        if is_newer(&latest, env!("CARGO_PKG_VERSION")) {
+            eprintln!();
+            eprintln!("{} {}", "↑ New version:".bright_yellow(), format!("v{latest}").bright_yellow().bold());
+            eprintln!("  {}", "curl -fsSL https://pipetable.com/install | sh".dimmed());
+        }
     }
     eprintln!();
 
