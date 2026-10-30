@@ -156,3 +156,5 @@ CSV, Parquet, JSON, NDJSON, TSV, Excel (xlsx, xls, xlsm). Files up to 2GB. Folde
 ## License
 
 [MIT](LICENSE)
+
+- MCP Registry name: `mcp-name: io.github.melihbirim/pipetable`

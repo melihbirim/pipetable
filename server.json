@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.melihbirim/pipetable",
+  "title": "Pipetable",
+  "description": "Local data runtime for AI agents: query CSV, Excel, Parquet and JSON files with DuckDB SQL.",
+  "repository": {
+    "url": "https://github.com/melihbirim/pipetable",
+    "source": "github"
+  },
+  "websiteUrl": "https://pipetable.com",
+  "version": "0.7.1",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "identifier": "pipetable",
+      "version": "0.7.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

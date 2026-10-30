@@ -37,11 +37,12 @@ read -rp "Proceed? (type 'y' to continue) " confirm
 
 # Update version in Cargo.toml
 sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" server.json
 
 # Quick compile check before tagging (actual binaries built by CI)
 cargo check 2>&1 | tail -1
 
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock server.json
 git commit -m "$TAG"
 git tag "$TAG"
 git push origin main
